@@ -10,6 +10,8 @@ class TimestampDocument(schema.Document):
 class Agent(TimestampDocument):
     type = schema.TextField(default='agent')
     post_ids = schema.ListField(schema.TextField())
+    link_ids = schema.ListField(schema.TextField())
+    domain_ids = schema.ListField(schema.TextField())
 
 class User(Agent):
     type = schema.TextField(default='user')
@@ -17,8 +19,8 @@ class User(Agent):
     hashpass = schema.TextField()
     upvote_ids = schema.ListField(schema.TextField())
     influence = schema.DictField(schema.Schema.build())
-#    influence = schema.DictField(schema.Schema.build(), default=int())
-#     upvotes = schema.ListField(schema.DictField(schema.Schema.build(
+#    influence = schema.DictField(schema.Schema.build(), default=int()) #why fails?
+#     upvotes = schema.ListField(schema.DictField(schema.Schema.build( #optomization ?
 #                 msg_id = schema.TextField(),
 #                 ts = schema.DateTimeField()
 #                 )))
@@ -28,8 +30,9 @@ class Message(TimestampDocument):
     title = schema.TextField()
     body = schema.TextField()
     link = schema.TextField()
+    channels = schema.ListField(schema.TextField())
     upvote_ids = schema.ListField(schema.TextField())
-#     upvotes = schema.ListField(schema.DictField(schema.Schema.build(
+#     upvotes = schema.ListField(schema.DictField(schema.Schema.build( #optomization ?
 #                 agent_id = schema.TextField(),
 #                 ts = schema.DateTimeField()
 #                 )))
@@ -56,17 +59,59 @@ class DownVote(Vote):
 class Visit(Vote):
     type = schema.TextField(default='visit')
 
+class AgentDomain(TimestampDocument):
+    """ Owned by an agent for purposes of influence 
+    Could be extended to include unique URLs for some blogs, etc."""
+    type = schema.TextField(default='agent_domain')
+    link = schema.TextField()
+    agent_id = schema.TextField()
+
+class Channel(TimestampDocument):
+    type = schema.TextField(default='channel')
+    name = schema.TextField()
+
+# class Link(Channel):
+#     type = schema.TextField(default='link')
+
 def create_user(db, username, password):
     user = User(username=username, hashpass=hashlib.sha224(password).hexdigest())
     user.store(db)
     return user
 
-def create_message(db, agent, title, link, body):
-    msg = Message(agent_id=agent.id, title=title, body=body, link=link)
+def create_message(db, agent, title, link, channels, body):
+    channel = get_channel(db, link)
+    if channel:
+        # already exists, so agreement with owning agent
+        pass
+    else:
+        # create now and assign ownership to agent
+        pass
+    msg = Message(agent_id=agent.id, title=title, channels=channels, body=body, link=link)
     msg.store(db)
     agent.post_ids.append(msg.id)
     agent.store(db)
     return msg
+
+def get_channel(db, name):
+    return Channel.load(db, name)
+
+def get_create_channel(db, name):
+    chan = get_channel(db, name)
+    if chan: 
+        return chan
+    chan = Channel(_id=name)
+    chan.store(db)
+    return chan
+
+def get_create_link(db, url, agent):
+    link = get_channel(db, url)
+    if link:
+        return link
+    link = Link(_id=url, agent_id=agent.id)
+    link.store(db)
+    agent.links.append(url)
+    agent.store(db)
+    return link
 
 def upvote_message(db, agent, msg):
     """ Queued process? """
@@ -80,8 +125,8 @@ def upvote_message(db, agent, msg):
     calculate_influence(db, msg, vote)
     return vote
 
-def respond_message(db, msg, agent, title, link, body):
-    resp = create_message(db, agent, title, link, body)
+def respond_message(db, msg, agent, title, link, channels, body):
+    resp = create_message(db, agent, title, link, channels, body)
     resp.parent_id = msg.id
     resp.store(db)
     msg.response_ids.append(resp.id)
@@ -95,7 +140,7 @@ def calculate_influence(db, msg, vote):
         owner.influence[vote.agent_id] += 1
     except KeyError:
         owner.influence[vote.agent_id] = 1
-        owner.store(db)
+    owner.store(db)
 
 def score(msg, user):
     # todo: account for influence
@@ -145,14 +190,14 @@ class Test(unittest.TestCase):
     def test_create_message(self):
         user = create_user(self.db, 'name', 'password')
         assert user.id is not None
-        msg = create_message(self.db, user, "Go here!", "http://...", "Wow, check it.")
+        msg = create_message(self.db, user, "Go here!", "http://...", [], "Wow, check it.")
         assert msg.id is not None
         self.assertEqual(msg.id, user.post_ids[0])
 
     def test_upvote_message(self):
         user = create_user(self.db, 'user', 'password')
         user2 = create_user(self.db, 'user2', 'password')
-        msg = create_message(self.db, user, "Go here!", "http://...", "Wow, check it.")
+        msg = create_message(self.db, user, "Go here!", "http://...", [], "Wow, check it.")
         vote = upvote_message(self.db, user2, msg)
         assert vote.id is not None
         user = User.load(self.db, user.id) # ensure latest version
@@ -161,8 +206,8 @@ class Test(unittest.TestCase):
     def test_respond_message(self):
         user = create_user(self.db, 'user', 'password')
         user2 = create_user(self.db, 'user2', 'password')
-        msg = create_message(self.db, user, "Go here!", "http://...", "Wow, check it.")
-        resp = respond_message(self.db, msg, user2, "First Post!", None, "Blah, blah")
+        msg = create_message(self.db, user, "Go here!", "http://...", [], "Wow, check it.")
+        resp = respond_message(self.db, msg, user2, "First Post!", None, [], "Blah, blah")
         self.assertEqual(msg.id, resp.parent_id)
 
 class RankTest(unittest.TestCase):
